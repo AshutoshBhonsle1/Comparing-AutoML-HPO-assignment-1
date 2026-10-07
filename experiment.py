@@ -18,6 +18,8 @@ from random_search import optimise_random_search
 from smbo import optimise_smbo
 from tabular_foundation import run_foundation_model
 
+import json
+
 # Update this if the provided largest dataset is replaced.
 FOUNDATION_DATASET = "covertype"
 
@@ -61,6 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-seed", type=int, default=2026)
     parser.add_argument("--cache-dir", type=Path, default=Path("data_cache"))
     return parser.parse_args()
+    parser.add_argument("--results", type=Path, default=Path("results"))
 
 
 def run_dataset(name: str, args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -138,6 +141,19 @@ def main() -> None:
     for name in names:
         print(f"Running {name} with seed {args.seed}", flush=True)
         results = run_dataset(name, args)
+
+        args.results_dir.mkdir(parents=True, exist_ok=True)
+
+    output_file = (
+        args.results_dir
+        / f"{name}_seed{args.seed}.json"
+    )
+
+    with output_file.open("w") as f:
+        json.dump(results, f, indent=2, default=str)
+
+    print(f"Saved results to {output_file}", flush=True)
+    
         # TODO: save results in a format of your choice, along with the settings
         # needed to reproduce the run. Retain enough information for your plots
         # and tables. This example only prints final results; it saves no files.
