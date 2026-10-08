@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, balanced_accuracy_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 
 Config = dict[str, Any]
 Evaluator = Callable[[Config, int, int], dict[str, Any]]
@@ -25,17 +25,24 @@ N_JOBS = 4
 # Optional starting point. Choose and justify a shared space and sampling rules,
 # or use your optimiser package's search-space tools. Keep tree count separate.
 SEARCH_SPACE = {
-    "max_depth": (None, 4, 16, 32),
+    "max_depth": (None, 4, 8, 16, 32),
     "max_features": ("sqrt", 0.5, 1.0),
     "min_samples_leaf": (1, 2, 4, 8),
 }
 
+PRIMARY_METRIC = "balanced_accuracy"
+OBJECTIVE_DIRECTION = "maximize"
+
 
 def sample_configuration(rng: np.random.Generator) -> Config:
+    """if using this helper: sample a legal configuration using rng.
+
+    Return the hyperparameters to pass to RandomForestClassifier. Account for
+    dependencies between parameters if you extend the example search space.
+    """
     return {
-        "max_depth": rng.choice(np.array(SEARCH_SPACE["max_depth"], dtype=object)),
-        "max_features": rng.choice(np.array(SEARCH_SPACE["max_features"], dtype=object)),
-        "min_samples_leaf": rng.choice(np.array(SEARCH_SPACE["min_samples_leaf"], dtype=object)),
+        name: values[int(rng.integers(0, len(values)))]
+        for name, values in SEARCH_SPACE.items()
     }
 
 
@@ -45,9 +52,9 @@ def make_classifier(config: Config, n_estimators: int, seed: int) -> RandomFores
     Tree count, seed, and parallelism are set here, outside the search space.
     Invalid configurations are left for scikit-learn to reject during fitting.
     """
-
+    #Create a Random Forest with a fixed tree resource and reproducible seed.
     return RandomForestClassifier(
-        n_estimators=n_estimators,
+        n_estimators=int(n_estimators),
         random_state=seed,
         n_jobs=N_JOBS,
         **config,
@@ -57,31 +64,27 @@ def make_classifier(config: Config, n_estimators: int, seed: int) -> RandomFores
 def predictive_metrics(
     model: Any, X: np.ndarray, y: np.ndarray
 ) -> dict[str, float]:
-    """TODO: evaluate the fitted model using your chosen predictive metrics.
+    """evaluate the fitted model using your chosen predictive metrics.
 
     Return metric names mapped to scalar values. Choose the prediction outputs
     your metrics require. Use the same definitions for validation, final testing,
     and the foundation comparison. This function must not fit the model.
     """
-
     predictions = model.predict(X)
-
     return {
-         "accuracy": float(accuracy_score(y, predictions)),
-         "balanced_accuracy": float( 
-             balanced_accuracy_score(y, predictions)
-             ),
-     }
+        "balanced_accuracy": float(balanced_accuracy_score(y, predictions)),
+        "macro_f1": float(f1_score(y, predictions, average="macro")),
+        "accuracy": float(accuracy_score(y, predictions)),
+    }
 
 
 def validation_objective(metrics: dict[str, float]) -> float:
-    """TODO: return the scalar objective used to compare configurations.
+    """return the scalar objective used to compare configurations.
 
     Explain its relationship to the primary metric and whether higher or lower
     is better. Apply that direction consistently in all optimisers.
     """
-
-    return metrics["balanced_accuracy"]
+    return float(metrics[PRIMARY_METRIC])
 
 
 def make_evaluator(
@@ -121,8 +124,7 @@ def final_test_evaluation(
     X_test: np.ndarray,
     y_test: np.ndarray,
 ) -> dict[str, Any]:
-    """Fit on all non-test data and score the test set, with the same timing scope."""
-
+    """Fit on all non-test data and evaluate once on the untouched test set."""
     start = perf_counter()
     model = make_classifier(config, n_estimators, seed)
     model.fit(X_train_valid, y_train_valid)
@@ -130,4 +132,5 @@ def final_test_evaluation(
     return {
         "metrics": metrics,
         "elapsed_sec": float(perf_counter() - start),
+        "n_trees": int(n_estimators),
     }

@@ -10,6 +10,7 @@ import argparse
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+import json
 
 from data_loading import DATASETS, load_and_split, prepare_data, prepare_final_data
 from hyperband import optimise_hyperband
@@ -17,8 +18,6 @@ from random_forest import final_test_evaluation, make_evaluator
 from random_search import optimise_random_search
 from smbo import optimise_smbo
 from tabular_foundation import run_foundation_model
-
-import json
 
 # Update this if the provided largest dataset is replaced.
 FOUNDATION_DATASET = "covertype"
@@ -63,7 +62,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-seed", type=int, default=2026)
     parser.add_argument("--cache-dir", type=Path, default=Path("data_cache"))
     return parser.parse_args()
-    parser.add_argument("--results", type=Path, default=Path("results"))
 
 
 def run_dataset(name: str, args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -93,7 +91,10 @@ def run_dataset(name: str, args: argparse.Namespace) -> list[dict[str, Any]]:
             start = perf_counter()
             if method == "default":
                 config = {}  # Library defaults, with the common tree count.
-                history = [evaluator(config, max_trees, args.seed)]
+                baseline_result = evaluator(config, max_trees, args.seed)
+                baseline_result["method"] = "default"
+                baseline_result["trial"] = 1
+                history = [baseline_result]
             elif method == "random":
                 config, history = optimise_random_search(
                     evaluator, profile["n_trials"], max_trees, args.seed
@@ -141,22 +142,31 @@ def main() -> None:
     for name in names:
         print(f"Running {name} with seed {args.seed}", flush=True)
         results = run_dataset(name, args)
-
-        args.results_dir.mkdir(parents=True, exist_ok=True)
-
-    output_file = (
-        args.results_dir
-        / f"{name}_seed{args.seed}.json"
-    )
-
-    with output_file.open("w") as f:
-        json.dump(results, f, indent=2, default=str)
-
-    print(f"Saved results to {output_file}", flush=True)
-    
-        # TODO: save results in a format of your choice, along with the settings
-        # needed to reproduce the run. Retain enough information for your plots
-        # and tables. This example only prints final results; it saves no files.
+        output_dir = Path("results")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{name}__{args.profile}__seed{args.seed}.json"
+        payload = {
+            "experiment": "automl_random_forest_comparison",
+            "dataset": name,
+            "dataset_openml_id": DATASETS[name],
+            "profile": args.profile,
+            "seed": args.seed,
+            "split_seed": args.split_seed,
+            "methods": args.methods,
+            "settings": {
+                "primary_metric": "balanced_accuracy",
+                "secondary_metrics": ["macro_f1", "accuracy"],
+                "objective_direction": "maximize",
+                "n_jobs": 4,
+                "max_samples": PROFILES[args.profile]["max_samples"],
+                "min_trees": PROFILES[args.profile]["min_trees"],
+                "max_trees": PROFILES[args.profile]["max_trees"],
+                "n_trials": PROFILES[args.profile]["n_trials"],
+            },
+            "results": results,
+        }
+        output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(f"Saved results to {output_path}", flush=True)
 
 
 if __name__ == "__main__":
